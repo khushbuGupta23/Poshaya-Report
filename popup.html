@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Poshaya Sale Report</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <svg class="logo" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="8" fill="#7C3AED"/>
+          <path d="M8 10h16M8 16h10M8 22h13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <h1 class="title">Poshaya Sale Report</h1>
+          <p class="subtitle" id="reportDate"></p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="badge" id="rowCount"></span>
+      </div>
+    </header>
+
+    <!-- Summary Cards -->
+    <div class="summary-grid" id="summaryGrid"></div>
+
+    <!-- Search & Filter -->
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 20 20" fill="none">
+          <circle cx="8.5" cy="8.5" r="5.5" stroke="#9CA3AF" stroke-width="1.5"/>
+          <path d="M13 13l3.5 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input id="searchInput" class="search-input" type="text" placeholder="Search any column…" />
+      </div>
+      <select id="partyFilter" class="filter-select">
+        <option value="">All Parties</option>
+      </select>
+      <select id="voucherFilter" class="filter-select">
+        <option value="">All Vouchers</option>
+      </select>
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrap">
+      <table id="reportTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+        <tfoot id="tableFoot"></tfoot>
+      </table>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span id="visibleCount"></span>
+      <span>Poshaya &copy; 2026</span>
+    </footer>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
