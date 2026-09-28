@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Poshaya Sale Report",
-  "version": "1.0.0",
-  "description": "Sales report viewer for Poshaya — shows all voucher and item details from the daily sale sheet.",
+  "version": "2.0.0",
+  "description": "Import any sale report Excel (.xlsx / .xls / .csv), view all columns, filter, sort, and download back as Excel.",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
