@@ -1,25 +1,49 @@
 (function () {
   /* ── State ──────────────────────────────────────── */
   let headers = [];
-  let allRows = [];       // raw data rows (arrays)
+  let allRows = [];
   let filtered = [];
   let sortCol = -1, sortDir = 1;
   let fileName = '';
 
-  /* ── Numeric column detection ───────────────────── */
-  function isNumericCol(colIdx) {
-    const sample = allRows.slice(0, 20).map(r => r[colIdx]).filter(v => v !== null && v !== undefined && v !== '');
-    if (sample.length === 0) return false;
-    return sample.filter(v => typeof v === 'number' || (!isNaN(Number(v)) && String(v).trim() !== '')).length > sample.length * 0.6;
+  /* ── Header normalization ───────────────────────── */
+  // Fixes common typos that Poshaya / Tally POS exports contain
+  const HEADER_FIX = {
+    'caterogry':         'Category',
+    'sub caterogry':     'Sub Category',
+    'cateogry':          'Category',
+    'sub cateogry':      'Sub Category',
+    'catergory':         'Category',
+    'sub catergory':     'Sub Category',
+    'catagory':          'Category',
+    'sub catagory':      'Sub Category',
+    'categroy':          'Category',
+    'sub categroy':      'Sub Category',
+  };
+
+  function normalizeHeader(raw) {
+    if (raw === null || raw === undefined) return '';
+    const s = String(raw).trim();
+    return HEADER_FIX[s.toLowerCase()] || s;
   }
 
+  /* ── Numeric column detection ───────────────────── */
+  function isNumericCol(colIdx) {
+    const sample = allRows.slice(0, 20).map(r => r[colIdx])
+      .filter(v => v !== null && v !== undefined && v !== '');
+    if (sample.length === 0) return false;
+    return sample.filter(v =>
+      typeof v === 'number' || (!isNaN(Number(v)) && String(v).trim() !== '')
+    ).length > sample.length * 0.6;
+  }
+  isNumericCol.cache = {};
+
   /* ── GST chip helper ────────────────────────────── */
-  function chipify(val, colIdx, hdr) {
-    const h = (hdr || '').toLowerCase();
+  function chipify(val, colIdx) {
+    const h = (headers[colIdx] || '').toLowerCase();
     if (h === 'voucher type') return `<span class="chip chip-sales">${val}</span>`;
     if (h === 'item tax') {
-      const s = String(val).toUpperCase();
-      const cls = s.includes('18') ? 'chip-gst18' : 'chip-gst5';
+      const cls = String(val).toUpperCase().includes('18') ? 'chip-gst18' : 'chip-gst5';
       return `<span class="chip ${cls}">${val}</span>`;
     }
     return null;
@@ -27,15 +51,20 @@
 
   function fmtCell(val, colIdx) {
     if (val === null || val === undefined || val === '') return '<span style="color:#D1D5DB">—</span>';
-    const chip = chipify(val, colIdx, headers[colIdx]);
+    const chip = chipify(val, colIdx);
     if (chip) return chip;
     if (typeof val === 'number') {
       const h = (headers[colIdx] || '').toLowerCase();
-      if (h.includes('%')) return val.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+      if (h.includes('%'))  return val.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
       if (h.includes('qty')) return val.toLocaleString('en-IN');
       return val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
     return String(val);
+  }
+
+  /* ── Column index helpers ───────────────────────── */
+  function colIdx(pattern) {
+    return headers.findIndex(h => pattern.test(h));
   }
 
   /* ── Parse sheet ────────────────────────────────── */
@@ -44,32 +73,57 @@
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
     if (!raw || raw.length < 2) throw new Error('Sheet appears empty or has no data rows.');
 
-    // find header row (first non-empty row)
+    // find first non-empty row → header row
     let hdrIdx = 0;
     while (hdrIdx < raw.length && raw[hdrIdx].every(c => c === null)) hdrIdx++;
 
-    headers = raw[hdrIdx].map(h => h === null ? '' : String(h).trim());
+    // normalize headers (fix typos like "Caterogry")
+    headers = raw[hdrIdx].map(normalizeHeader);
 
     const dataRows = [];
     for (let r = hdrIdx + 1; r < raw.length; r++) {
       const row = raw[r];
-      // skip rows that are completely null
-      if (row.every(c => c === null || c === '')) continue;
+      if (row.every(c => c === null || c === '')) continue; // blank row
       dataRows.push(headers.map((_, c) => row[c] !== undefined ? row[c] : null));
     }
     return dataRows;
   }
 
-  /* ── Detect totals row ──────────────────────────── */
+  /* ── Split data rows from subtotal / grand-total rows ── */
+  // Tally/POS exports insert sub-category subtotal rows between sale rows.
+  // Example: ["Dress Material :", null, null, ..., 5, 1234.00, ...]
+  // A genuine sale row always has a non-empty Voucher No.
   function splitTotals(rows) {
-    // heuristic: last row whose first non-null cell contains "total" or "grand"
-    const last = rows[rows.length - 1];
-    if (!last) return { dataRows: rows, totalRow: null };
-    const firstVal = last.find(c => c !== null && c !== '');
-    if (firstVal && /total|grand/i.test(String(firstVal))) {
-      return { dataRows: rows.slice(0, -1), totalRow: last };
-    }
-    return { dataRows: rows, totalRow: null };
+    const vcIdx = colIdx(/^voucher\s*no$/i);
+    const dataRows = [];
+    let totalRow = null;
+
+    rows.forEach(row => {
+      const firstVal = String(row.find(c => c !== null && c !== '') ?? '');
+
+      // Grand total row — capture and skip
+      if (/grand\s*total|grant\s*total/i.test(firstVal)) {
+        totalRow = row;
+        return;
+      }
+
+      // Sub-category or category subtotal rows from Tally:
+      // they have no Voucher No and their first cell ends with ":"
+      // or contains "total" or matches a known grouping pattern
+      if (vcIdx >= 0) {
+        const vcVal = row[vcIdx];
+        if ((vcVal === null || vcVal === '') && /:\s*$|total/i.test(firstVal)) {
+          return; // skip subtotal row
+        }
+      } else {
+        // no Voucher No column — fallback: skip if first cell ends with ":"
+        if (/:\s*$/.test(firstVal)) return;
+      }
+
+      dataRows.push(row);
+    });
+
+    return { dataRows, totalRow };
   }
 
   /* ── Summary cards ──────────────────────────────── */
@@ -77,36 +131,33 @@
     const grid = document.getElementById('summaryGrid');
     grid.innerHTML = '';
 
-    const numericCols = headers.map((_, i) => i).filter(i => isNumericCol.cache[i]);
-
-    // unique items
     addCard(grid, 'Items', dataRows.length, '');
 
-    // from totals row if available
-    if (totalRow) {
-      numericCols.slice(0, 4).forEach(ci => {
-        const v = totalRow[ci];
-        if (v !== null && v !== undefined && v !== '') {
-          const h = headers[ci];
-          const formatted = typeof v === 'number'
-            ? '₹ ' + v.toLocaleString('en-IN', { minimumFractionDigits: 2 })
-            : v;
-          const cls = h.toLowerCase().includes('discount') ? 'red' :
-                      h.toLowerCase().includes('amount') || h.toLowerCase().includes('net') ? 'green' : '';
-          addCard(grid, h, formatted, cls);
-        }
-      });
-    } else {
-      // auto-sum first few numeric cols
-      numericCols.slice(0, 4).forEach(ci => {
-        const h = headers[ci];
-        const sum = dataRows.reduce((acc, r) => acc + (typeof r[ci] === 'number' ? r[ci] : 0), 0);
-        const formatted = '₹ ' + sum.toLocaleString('en-IN', { minimumFractionDigits: 2 });
-        const cls = h.toLowerCase().includes('discount') ? 'red' :
-                    h.toLowerCase().includes('amount') || h.toLowerCase().includes('net') ? 'green' : '';
-        addCard(grid, h, formatted, cls);
-      });
-    }
+    const numericCols = headers.map((_, i) => i).filter(i => isNumericCol.cache[i]);
+    const PRIORITY = ['net amount', 'taxable value', 'total discount', 'bill level disc'];
+
+    // prefer named priority columns; fall back to first numeric cols
+    const chosen = [];
+    PRIORITY.forEach(p => {
+      const ci = headers.findIndex(h => h.toLowerCase().includes(p));
+      if (ci >= 0 && !chosen.includes(ci)) chosen.push(ci);
+    });
+    numericCols.forEach(ci => { if (!chosen.includes(ci)) chosen.push(ci); });
+
+    chosen.slice(0, 4).forEach(ci => {
+      const h = headers[ci];
+      const source = totalRow && (totalRow[ci] !== null && totalRow[ci] !== undefined)
+        ? totalRow[ci]
+        : dataRows.reduce((acc, r) => acc + (typeof r[ci] === 'number' ? r[ci] : 0), 0);
+      if (!source && source !== 0) return;
+      const formatted = typeof source === 'number'
+        ? '₹ ' + source.toLocaleString('en-IN', { minimumFractionDigits: 2 })
+        : source;
+      const cls = h.toLowerCase().includes('discount') ? 'red'
+                : (h.toLowerCase().includes('amount') || h.toLowerCase().includes('net')) ? 'green'
+                : '';
+      addCard(grid, h, formatted, cls);
+    });
   }
 
   function addCard(grid, label, value, cls) {
@@ -130,7 +181,7 @@
     thead.appendChild(tr);
   }
 
-  /* ── Table foot (totals) ────────────────────────── */
+  /* ── Table foot ─────────────────────────────────── */
   let totalRow = null;
   function buildFoot() {
     const tfoot = document.getElementById('tableFoot');
@@ -154,27 +205,23 @@
   }
 
   /* ── Filters ────────────────────────────────────── */
+  const FILTER_DEFS = [
+    { id: 'partyFilter',       pattern: /^party\s*name$/i,        label: 'All Parties' },
+    { id: 'voucherFilter',     pattern: /^voucher\s*no$/i,         label: 'All Vouchers' },
+    { id: 'categoryFilter',    pattern: /^category$/i,             label: 'All Categories' },
+    { id: 'subCategoryFilter', pattern: /^sub\s*category$/i,       label: 'All Sub-Categories' },
+  ];
+
   function populateFilters(rows) {
-    const pf = document.getElementById('partyFilter');
-    const vf = document.getElementById('voucherFilter');
-    pf.innerHTML = '<option value="">All Parties</option>';
-    vf.innerHTML = '<option value="">All Vouchers</option>';
-
-    // detect col indices by header name
-    const partyIdx   = headers.findIndex(h => /party|customer|name/i.test(h));
-    const voucherIdx = headers.findIndex(h => /voucher no|bill no|invoice/i.test(h));
-
-    if (partyIdx >= 0) {
-      [...new Set(rows.map(r => r[partyIdx]).filter(Boolean))].sort()
-        .forEach(p => pf.insertAdjacentHTML('beforeend', `<option value="${p}">${p}</option>`));
-    }
-    if (voucherIdx >= 0) {
-      [...new Set(rows.map(r => r[voucherIdx]).filter(Boolean))].sort()
-        .forEach(v => vf.insertAdjacentHTML('beforeend', `<option value="${v}">${v}</option>`));
-    }
-
-    pf.dataset.colIdx = partyIdx;
-    vf.dataset.colIdx = voucherIdx;
+    FILTER_DEFS.forEach(({ id, pattern, label }) => {
+      const sel = document.getElementById(id);
+      sel.innerHTML = `<option value="">${label}</option>`;
+      const ci = headers.findIndex(h => pattern.test(h));
+      sel.dataset.colIdx = ci;
+      if (ci < 0) return;
+      [...new Set(rows.map(r => r[ci]).filter(v => v !== null && v !== ''))].sort()
+        .forEach(v => sel.insertAdjacentHTML('beforeend', `<option value="${v}">${v}</option>`));
+    });
   }
 
   /* ── Render rows ────────────────────────────────── */
@@ -211,7 +258,8 @@
   function sortBy(col) {
     const ths = document.querySelectorAll('#tableHead th');
     ths.forEach(th => th.classList.remove('sort-asc', 'sort-desc'));
-    if (sortCol === col) { sortDir *= -1; } else { sortCol = col; sortDir = 1; }
+    sortDir = (sortCol === col) ? sortDir * -1 : 1;
+    sortCol = col;
     ths[col].classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
     applySort();
     render();
@@ -227,20 +275,19 @@
 
   /* ── Filter + Search ────────────────────────────── */
   function applyFilters() {
-    const q    = document.getElementById('searchInput').value.toLowerCase();
-    const pf   = document.getElementById('partyFilter');
-    const vf   = document.getElementById('voucherFilter');
-    const pi   = parseInt(pf.dataset.colIdx ?? -1);
-    const vi   = parseInt(vf.dataset.colIdx ?? -1);
-    const party   = pf.value;
-    const voucher = vf.value;
+    const q = document.getElementById('searchInput').value.toLowerCase();
 
     filtered = allRows.filter(row => {
-      if (party   && pi >= 0 && row[pi]  !== party)   return false;
-      if (voucher && vi >= 0 && row[vi]  !== voucher)  return false;
+      for (const { id } of FILTER_DEFS) {
+        const sel = document.getElementById(id);
+        const val = sel.value;
+        const ci  = parseInt(sel.dataset.colIdx ?? -1);
+        if (val && ci >= 0 && row[ci] !== val) return false;
+      }
       if (q) return row.some(c => c !== null && String(c).toLowerCase().includes(q));
       return true;
     });
+
     applySort();
     render();
   }
@@ -248,14 +295,10 @@
   /* ── Download Excel ─────────────────────────────── */
   function downloadExcel() {
     const wb = XLSX.utils.book_new();
-
-    // build rows: header + filtered data + optional totals
     const sheetData = [headers, ...filtered];
     if (totalRow) sheetData.push(totalRow);
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
-
-    // column widths
     ws['!cols'] = headers.map((h, i) => {
       const maxLen = Math.max(
         String(h).length,
@@ -264,17 +307,14 @@
       return { wch: Math.min(Math.max(maxLen + 2, 10), 40) };
     });
 
-    // style header row bold
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let c = range.s.c; c <= range.e.c; c++) {
       const addr = XLSX.utils.encode_cell({ r: 0, c });
-      if (!ws[addr]) continue;
-      ws[addr].s = { font: { bold: true }, fill: { fgColor: { rgb: '7C3AED' } } };
+      if (ws[addr]) ws[addr].s = { font: { bold: true } };
     }
 
     XLSX.utils.book_append_sheet(wb, ws, 'Sale Report');
-    const outName = fileName.replace(/\.[^.]+$/, '') + '_export.xlsx';
-    XLSX.writeFile(wb, outName || 'sale_report_export.xlsx');
+    XLSX.writeFile(wb, (fileName.replace(/\.[^.]+$/, '') || 'sale_report') + '_export.xlsx');
   }
 
   /* ── Load file ──────────────────────────────────── */
@@ -286,17 +326,15 @@
       try {
         const wb = XLSX.read(e.target.result, { type: 'array', cellDates: false });
         const rawRows = parseSheet(wb);
-        const split   = splitTotals(rawRows);
+        const split  = splitTotals(rawRows);
         allRows  = split.dataRows;
         totalRow = split.totalRow;
 
-        // cache numeric column flags
         isNumericCol.cache = {};
         headers.forEach((_, i) => { isNumericCol.cache[i] = isNumericCol(i); });
 
         filtered = [...allRows];
 
-        // update UI
         document.getElementById('reportMeta').textContent =
           `${file.name}  ·  ${allRows.length} rows · ${headers.length} columns`;
         document.getElementById('rowCount').textContent = `${allRows.length} Items`;
@@ -308,12 +346,10 @@
 
         // reset toolbar
         document.getElementById('searchInput').value = '';
-        document.getElementById('partyFilter').value = '';
-        document.getElementById('voucherFilter').value = '';
+        FILTER_DEFS.forEach(({ id }) => { document.getElementById(id).value = ''; });
 
         render();
 
-        // show report screen
         document.getElementById('importScreen').classList.add('hidden');
         document.getElementById('reportScreen').classList.remove('hidden');
       } catch (err) {
@@ -334,16 +370,14 @@
   const dropZone  = document.getElementById('dropZone');
 
   fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
-
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
   dropZone.addEventListener('drop', e => {
     e.preventDefault(); dropZone.classList.remove('drag-over');
-    const f = e.dataTransfer.files[0];
-    if (f) loadFile(f);
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
   });
 
-  /* ── Wire up report screen controls ────────────── */
+  /* ── Wire up report screen ──────────────────────── */
   document.getElementById('btnDownload').addEventListener('click', downloadExcel);
   document.getElementById('btnImportNew').addEventListener('click', () => {
     document.getElementById('reportScreen').classList.add('hidden');
@@ -353,6 +387,7 @@
   });
 
   document.getElementById('searchInput').addEventListener('input', applyFilters);
-  document.getElementById('partyFilter').addEventListener('change', applyFilters);
-  document.getElementById('voucherFilter').addEventListener('change', applyFilters);
+  FILTER_DEFS.forEach(({ id }) => {
+    document.getElementById(id).addEventListener('change', applyFilters);
+  });
 })();
