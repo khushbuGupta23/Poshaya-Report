@@ -1,0 +1,145 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Zoho POS – Sales & Stock Report</title>
+  <style>
+    :root {
+      --green:#217346; --green-dark:#185c37; --grid:#c8c8c8; --hdr:#f3f3f3; --hdr-ink:#444;
+      --head:#d9e7f9; --band:#d4e6fc; --sel:#e6f2ea; --ink:#000; --muted:#666;
+    }
+    * { box-sizing:border-box; }
+    html, body { height:100%; margin:0; }
+    body { display:flex; flex-direction:column; font:13px Arial, sans-serif; color:var(--ink); background:#fff; }
+
+    .titlebar { background:var(--green); color:#fff; padding:6px 12px; font-size:14px; font-weight:bold; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 12px; background:#f8f8f8; border-bottom:1px solid var(--grid); }
+    .toolbar label { color:var(--muted); font-size:12px; }
+    .toolbar input, .toolbar select { padding:4px 6px; border:1px solid #bbb; border-radius:3px; font:inherit; background:#fff; }
+    .toolbar button { padding:5px 10px; border:1px solid #bbb; border-radius:3px; background:#fff; font:inherit; cursor:pointer; }
+    .toolbar button.primary { background:var(--green); color:#fff; border-color:var(--green-dark); }
+    .toolbar button:disabled { opacity:.5; cursor:default; }
+    .toolbar .sep { width:1px; height:22px; background:#ccc; margin:0 4px; }
+    .toolbar .chk { display:flex; align-items:center; gap:4px; font-size:12px; color:#333; }
+
+    .progress { height:3px; background:transparent; }
+    .progress > div { height:100%; width:0; background:var(--green); transition:width .2s; }
+
+    .fbar { display:flex; border-bottom:1px solid var(--grid); background:#fff; }
+    .fbar .namebox { width:80px; padding:4px 8px; border-right:1px solid var(--grid); font-family:Consolas, monospace; }
+    .fbar .fx { padding:4px 8px; color:var(--muted); border-right:1px solid var(--grid); font-style:italic; }
+    .fbar .fval { flex:1; padding:4px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    #gridWrap { flex:1; overflow:auto; }
+    table.grid { border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
+    .grid th, .grid td { border-right:1px solid var(--grid); border-bottom:1px solid var(--grid); padding:2px 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:22px; }
+    .grid thead th { position:sticky; background:var(--hdr); color:var(--hdr-ink); z-index:2; font-weight:normal; }
+    .grid tr.letters th { top:0; text-align:center; font-size:12px; cursor:pointer; }
+    .grid tr.hdr th { top:23px; height:38px; background:var(--head); color:#000; cursor:pointer; text-align:center; white-space:normal; line-height:1.15; }
+    .grid tr.hdr th.r { text-align:right; }
+    .grid tr.flt th { top:62px; padding:1px 2px; background:#fafafa; }
+    .grid tr.flt input { width:100%; border:1px solid #ddd; padding:2px 4px; font:12px Arial, sans-serif; }
+    .grid th.rn { position:sticky; left:0; z-index:3; background:var(--hdr); color:var(--hdr-ink); text-align:center; font-size:12px; }
+    .grid thead th.rn { z-index:4; }
+    .grid td.r { text-align:right; }
+    .grid tbody tr:hover td { background:#f7fbff; }
+    .grid td.sel { outline:2px solid var(--green); outline-offset:-2px; background:#fff !important; }
+    .grid td.colsel, .grid th.colsel { background:var(--sel) !important; }
+    .grid tfoot td, .grid tfoot th { position:sticky; bottom:0; background:#fff; font-weight:bold; font-size:12px; text-align:right; border-top:2px solid #999; z-index:2; height:26px; }
+    .grid tfoot th.rn { z-index:3; background:var(--hdr); }
+    .arrow { color:var(--green); font-size:10px; margin-left:3px; }
+    .empty { padding:40px; color:var(--muted); text-align:center; line-height:1.7; }
+
+    .tabs { display:flex; background:#f0f0f0; border-top:1px solid var(--grid); padding-left:8px; overflow-x:auto; }
+    .tabs button { border:none; border-right:1px solid var(--grid); background:transparent; padding:6px 18px; font:inherit; cursor:pointer; color:#333; white-space:nowrap; }
+    .tabs button.active { background:#fff; color:var(--green); font-weight:bold; border-bottom:3px solid var(--green); }
+    .status { display:flex; justify-content:space-between; gap:16px; background:var(--green); color:#fff; padding:3px 12px; font-size:12px; }
+
+    /* field check dialog */
+    dialog { width:min(900px, 92vw); max-height:85vh; border:1px solid #999; border-radius:6px; padding:0; }
+    dialog header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#f3f3f3; border-bottom:1px solid #ccc; font-weight:bold; }
+    dialog pre { margin:0; padding:12px; max-height:70vh; overflow:auto; font:12px Consolas, monospace; white-space:pre-wrap; }
+    dialog button { padding:4px 10px; font:inherit; cursor:pointer; }
+
+    /* ---- Daily Statement (receipt style, same as Quick Bill) ---- */
+    .receiptWrap { padding:24px; display:flex; justify-content:center; background:#eee; min-height:100%; }
+    .receipt { width:76mm; background:#fff; padding:4mm 3mm; font:12px Arial, sans-serif; color:#000; box-shadow:0 1px 4px rgba(0,0,0,.25); }
+    .receipt .c { text-align:center; }
+    .receipt .title { font-weight:bold; font-size:14px; }
+    .receipt .co { font-weight:bold; font-size:13px; line-height:1.15; }
+    .receipt .gst { font-weight:bold; margin-top:2px; }
+    .receipt table { width:100%; border-collapse:collapse; margin-top:2px; }
+    .receipt th { font-weight:bold; border-top:1px solid #000; border-bottom:1px solid #000; padding:2px 1px; }
+    .receipt th.n { text-align:left; padding-left:14mm; }
+    .receipt td { padding:2px 1px; }
+    .receipt td.lbl { text-align:right; font-style:italic; padding-right:4px; }
+    .receipt td.cnt { text-align:center; font-style:italic; width:9mm; }
+    .receipt td.amt { text-align:right; font-style:italic; width:22mm; }
+    .receipt tr.sec td { font-weight:bold; font-style:normal; text-align:left; border-top:1px solid #000; padding-top:3px; }
+    .receipt tr.strong td { font-weight:bold; }
+    .receipt .note { color:#888; font-size:11px; text-align:center; margin-top:10px; }
+
+    @page receipt { size:80mm 200mm; margin:2mm; }
+    @media print {
+      body.print-summary > *:not(#gridWrap) { display:none !important; }
+      body.print-summary #gridWrap { overflow:visible; }
+      body.print-summary .receiptWrap { padding:0; background:#fff; display:block; }
+      body.print-summary .receipt { page:receipt; box-shadow:none; margin:0; }
+      body.print-summary .receipt .note { display:none; }
+    }
+
+    @media print {
+      .titlebar, .toolbar, .progress, .fbar, .tabs, .status, tr.letters, tr.flt, .grid th.rn { display:none !important; }
+      #gridWrap { overflow:visible; }
+      .grid thead th, .grid tfoot td, .grid tfoot th { position:static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="titlebar">Zoho POS – Sales &amp; Stock Report</div>
+
+  <div class="toolbar">
+    <label>Org ID</label><input id="orgId" size="12" placeholder="Organization ID">
+    <span class="sep"></span>
+    <label>Period</label>
+    <select id="preset">
+      <option value="today">Today</option>
+      <option value="yesterday">Yesterday</option>
+      <option value="7">Last 7 days</option>
+      <option value="month" selected>This month</option>
+      <option value="lastmonth">Last month</option>
+      <option value="30">Last 30 days</option>
+      <option value="custom">Custom</option>
+    </select>
+    <input type="date" id="from"> <label>to</label> <input type="date" id="to">
+    <button id="run" class="primary">▶ Run</button>
+    <span class="sep"></span>
+    <button id="dlSales">⬇ Sales Report (.xlsx)</button>
+    <button id="dlStock">⬇ Stock Report (.xlsx)</button>
+    <span class="sep"></span>
+    <button id="clear">✕ Clear filters</button>
+    <button id="print">🖨 Print</button>
+  </div>
+  <div class="progress"><div id="bar"></div></div>
+
+  <div class="fbar">
+    <div class="namebox" id="nameBox"></div>
+    <div class="fx">fx</div>
+    <div class="fval" id="fVal"></div>
+  </div>
+
+  <div id="gridWrap"><div class="empty">Pick a period and click ▶ Run.<br>
+    The first run downloads each bill's details once (about 1–2 seconds per bill); later runs reuse them.</div></div>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="status"><span id="statusL">Ready</span><span id="statusR"></span></div>
+
+  <dialog id="dlg">
+    <header><span>Raw data from Zoho (first invoice &amp; first item)</span>
+      <span><button id="dlgCopy">Copy</button> <button id="dlgClose">Close</button></span></header>
+    <pre id="dlgPre"></pre>
+  </dialog>
+
+  <script src="report.js"></script>
+</body>
+</html>

@@ -1,19 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Poshaya Sale Report",
-  "version": "2.0.0",
-  "description": "Import any sale report Excel (.xlsx / .xls / .csv), view all columns, filter, sort, and download back as Excel.",
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  "name": "Zoho POS Reports",
+  "version": "1.4.0",
+  "description": "Sales and Stock reports from Zoho POS in Excel format",
+  "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["identity", "storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://accounts.zoho.in/*",
+    "https://api.zakya.in/*"
+  ]
 }

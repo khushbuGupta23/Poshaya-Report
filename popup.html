@@ -1,110 +1,27 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Poshaya Sale Report</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="utf-8">
+  <style>
+    body { width: 380px; font: 13px system-ui, sans-serif; margin: 12px; }
+    input, select, button { width: 100%; padding: 6px; margin: 4px 0; box-sizing: border-box; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    td, th { border-bottom: 1px solid #ddd; padding: 4px; text-align: left; }
+    #status { color: #666; margin-top: 6px; }
+  </style>
 </head>
 <body>
-  <div class="app" id="app">
-
-    <!-- ── Import Screen ──────────────────────────── -->
-    <div id="importScreen" class="import-screen">
-      <div class="import-card">
-        <svg class="import-logo" viewBox="0 0 48 48" fill="none">
-          <rect width="48" height="48" rx="12" fill="#7C3AED"/>
-          <path d="M12 15h24M12 24h16M12 33h20" stroke="white" stroke-width="3" stroke-linecap="round"/>
-        </svg>
-        <h1 class="import-title">Poshaya Sale Report</h1>
-        <p class="import-sub">Import your sale report Excel file to get started</p>
-
-        <label class="drop-zone" id="dropZone">
-          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden />
-          <svg class="drop-icon" viewBox="0 0 48 48" fill="none">
-            <rect x="6" y="6" width="36" height="36" rx="8" stroke="#A78BFA" stroke-width="2" stroke-dasharray="4 3"/>
-            <path d="M24 30V18M24 18l-5 5M24 18l5 5" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <p class="drop-text">Drag &amp; drop your Excel file here</p>
-          <p class="drop-sub">or <span class="drop-link">click to browse</span></p>
-          <p class="drop-formats">Supports .xlsx · .xls · .csv</p>
-        </label>
-
-        <div id="importError" class="import-error hidden"></div>
-      </div>
-    </div>
-
-    <!-- ── Report Screen ──────────────────────────── -->
-    <div id="reportScreen" class="hidden">
-
-      <!-- Header -->
-      <header class="header">
-        <div class="header-left">
-          <svg class="logo" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="8" fill="#7C3AED"/>
-            <path d="M8 10h16M8 16h10M8 22h13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-          </svg>
-          <div>
-            <h1 class="title">Poshaya Sale Report</h1>
-            <p class="subtitle" id="reportMeta"></p>
-          </div>
-        </div>
-        <div class="header-right">
-          <span class="badge" id="rowCount"></span>
-          <button class="btn-download" id="btnDownload" title="Download as Excel">
-            <svg viewBox="0 0 20 20" fill="none" width="15" height="15">
-              <path d="M10 3v10M10 13l-3.5-3.5M10 13l3.5-3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M3 16h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-            Download Excel
-          </button>
-          <button class="btn-ghost" id="btnImportNew" title="Load another file">
-            <svg viewBox="0 0 20 20" fill="none" width="14" height="14">
-              <path d="M4 4h7l4 4v8H4V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-              <path d="M11 4v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-            </svg>
-            New File
-          </button>
-        </div>
-      </header>
-
-      <!-- Summary Cards -->
-      <div class="summary-grid" id="summaryGrid"></div>
-
-      <!-- Toolbar -->
-      <div class="toolbar">
-        <div class="search-wrap">
-          <svg class="search-icon" viewBox="0 0 20 20" fill="none">
-            <circle cx="8.5" cy="8.5" r="5.5" stroke="#9CA3AF" stroke-width="1.5"/>
-            <path d="M13 13l3.5 3.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          <input id="searchInput" class="search-input" type="text" placeholder="Search any column…" />
-        </div>
-        <select id="partyFilter"       class="filter-select"><option value="">All Parties</option></select>
-        <select id="voucherFilter"     class="filter-select"><option value="">All Vouchers</option></select>
-        <select id="categoryFilter"    class="filter-select"><option value="">All Categories</option></select>
-        <select id="subCategoryFilter" class="filter-select"><option value="">All Sub-Categories</option></select>
-      </div>
-
-      <!-- Table -->
-      <div class="table-wrap">
-        <table id="reportTable">
-          <thead id="tableHead"></thead>
-          <tbody id="tableBody"></tbody>
-          <tfoot id="tableFoot"></tfoot>
-        </table>
-      </div>
-
-      <!-- Footer -->
-      <footer class="footer">
-        <span id="visibleCount"></span>
-        <span>Poshaya &copy; 2026</span>
-      </footer>
-    </div>
-
-  </div>
-
-  <script src="lib/xlsx.min.js"></script>
+  <button id="login">Sign in with Zoho</button>
+  <input id="orgId" placeholder="Organization ID">
+  <select id="module">
+    <option value="items">Items</option>
+    <option value="invoices">Invoices</option>
+    <option value="contacts">Contacts</option>
+  </select>
+  <button id="fetch">Fetch</button>
+  <button id="report">📊 Open Sales &amp; Stock Report</button>
+  <div id="status"></div>
+  <table id="out"></table>
   <script src="popup.js"></script>
 </body>
 </html>
