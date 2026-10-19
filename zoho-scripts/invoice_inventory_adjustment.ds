@@ -1,0 +1,347 @@
+// ============================================================
+// Invoice Inventory Adjustment + Auto-Number Update
+// Trigger: On Invoice Created / Updated (all invoices)
+// ============================================================
+
+domainUrl = organization.get("api_root_endpoint");
+inv_ID = invoice.get("invoice_id");
+organizationID = organization.get("organization_id");
+
+// ── STEP 1: Fetch invoice details ──────────────────────────
+invoiceResponse = invokeurl
+[
+	url :domainUrl + "/invoices/" + inv_ID + "?organization_id=" + organizationID
+	type :GET
+	connection:"zpos"
+];
+invoiceDetails = invoiceResponse.get("invoice");
+
+if(invoiceDetails != null)
+{
+	// ── STEP 2: Auto-number update ────────────────────────
+	customFields = invoiceDetails.get("custom_field_hash");
+	AutoInv = ifnull(customFields.get("cf_invoice_auto_number"), "");
+	currentInvNo = invoiceDetails.get("invoice_number");
+	info "AutoInv: " + AutoInv;
+
+	if(AutoInv != "" && AutoInv != currentInvNo)
+	{
+		payload = Map();
+		payload.put("customer_id", invoiceDetails.get("customer_id"));
+		payload.put("date", invoiceDetails.get("date"));
+		payload.put("invoice_number", AutoInv);
+		params = Map();
+		params.put("JSONString", payload.toString());
+		headerMap = Map();
+		headerMap.put("Content-Type", "application/json");
+		updateInv = invokeurl
+		[
+			url :domainUrl + "/invoices/" + inv_ID + "?organization_id=" + organizationID
+			type :PUT
+			parameters:params
+			headers:headerMap
+			connection:"zpos"
+		];
+		info "Auto-number update response: " + updateInv;
+
+		// Re-fetch invoice after number update to use fresh data below
+		invoiceResponse = invokeurl
+		[
+			url :domainUrl + "/invoices/" + inv_ID + "?organization_id=" + organizationID
+			type :GET
+			connection:"zpos"
+		];
+		invoiceDetails = invoiceResponse.get("invoice");
+	}
+
+	// ── STEP 3: Determine if this is a Shopify order ──────
+	isShopifyOrder = false;
+	cfHash = invoiceDetails.get("custom_field_hash");
+	if(cfHash != null)
+	{
+		cfSource = ifnull(cfHash.get("cf_source"), "");
+		if(cfSource.toLowerCase().contains("shopify"))
+		{
+			isShopifyOrder = true;
+		}
+	}
+	info "isShopifyOrder: " + isShopifyOrder;
+
+	// ── STEP 4: Build adjustment line items ───────────────
+	invoiceItemList = invoiceDetails.get("line_items");
+	lineItemList = List();
+	AssociateSKU = List();
+
+	for each invItem in invoiceItemList
+	{
+		itemID = invItem.get("item_id");
+		itemSKU = ifnull(invItem.get("sku"), "");
+		invoiceQty = ifnull(invItem.get("quantity"), 0);
+
+		// ── 4a: Check composite item mapping ──────────────
+		compositeResponse = invokeurl
+		[
+			url :domainUrl + "/compositeitems/" + itemID + "?organization_id=" + organizationID
+			type :GET
+			connection:"zpos"
+		];
+		compositeItemData = compositeResponse.get("composite_item");
+		isCompositeMapped = false;
+
+		if(compositeItemData != null)
+		{
+			mappedItems = compositeItemData.get("mapped_items");
+			if(mappedItems != null && mappedItems.size() > 0)
+			{
+				for each mpItem in mappedItems
+				{
+					groupID = mpItem.get("composite_item_id");
+					compositeItemID = mpItem.get("group_id");
+					if(compositeItemID == groupID)
+					{
+						isCompositeMapped = true;
+						componentItemID = mpItem.get("item_id");
+						componentQty = ifnull(mpItem.get("quantity"), 0) * invoiceQty;
+						if(componentQty > 0)
+						{
+							lineItemMap = Map();
+							lineItemMap.put("item_id", componentItemID);
+							lineItemMap.put("quantity_adjusted", 0 - componentQty);
+							lineItemMap.put("unit", "qty");
+							lineItemList.add(lineItemMap);
+						}
+					}
+				}
+			}
+		}
+
+		// ── 4b: TBD suffix logic (non-composite path) ─────
+		if(isCompositeMapped == false)
+		{
+			isTDB = itemSKU.endsWith("T") || itemSKU.endsWith("D") || itemSKU.endsWith("B");
+
+			if(!isShopifyOrder && isTDB)
+			{
+				// Regular invoice with a child TBD item → adjust parent SKU
+				parentSKU = itemSKU.subString(0, itemSKU.length() - 1);
+
+				if(!AssociateSKU.contains(parentSKU))
+				{
+					AssociateSKU.add(parentSKU);
+					searchItemResponse = invokeurl
+					[
+						url :domainUrl + "/items?organization_id=" + organizationID + "&sku=" + parentSKU
+						type :GET
+						connection:"zpos"
+					];
+					searchItems = searchItemResponse.get("items");
+
+					if(searchItems != null && searchItems.size() > 0)
+					{
+						parentItem = searchItems.get(0);
+						parentItemID = parentItem.get("item_id");
+						availableForSaleQty = ifnull(parentItem.get("available_for_sale_stock"), 0);
+
+						info "Parent SKU: " + parentSKU + " | Available for sale: " + availableForSaleQty + " | Invoice qty: " + invoiceQty;
+
+						// Only add to adjustment if stock has not already been reduced
+						if(parentItemID != null && availableForSaleQty > 0)
+						{
+							lineItemMap = Map();
+							lineItemMap.put("item_id", parentItemID);
+							lineItemMap.put("quantity_adjusted", 0 - invoiceQty);
+							lineItemMap.put("unit", "qty");
+							lineItemList.add(lineItemMap);
+						}
+						else
+						{
+							info "Skipping parent SKU " + parentSKU + " — available stock is 0 or already adjusted.";
+						}
+					}
+					else
+					{
+						info "Associated parent SKU not found: " + parentSKU;
+					}
+				}
+			}
+			else if(isShopifyOrder && !isTDB && itemSKU != "")
+			{
+				// Shopify order with a parent item → find and adjust child TBD items
+				tdbSuffixes = {"T","D","B"};
+				for each suffix in tdbSuffixes
+				{
+					childSKU = itemSKU + suffix;
+
+					if(!AssociateSKU.contains(childSKU))
+					{
+						AssociateSKU.add(childSKU);
+						searchChildResponse = invokeurl
+						[
+							url :domainUrl + "/items?organization_id=" + organizationID + "&sku=" + childSKU
+							type :GET
+							connection:"zpos"
+						];
+						childItems = searchChildResponse.get("items");
+
+						if(childItems != null && childItems.size() > 0)
+						{
+							childItem = childItems.get(0);
+							childItemID = childItem.get("item_id");
+							availableForSaleQty = ifnull(childItem.get("available_for_sale_stock"), 0);
+
+							info "Child SKU: " + childSKU + " | Available for sale: " + availableForSaleQty + " | Invoice qty: " + invoiceQty;
+
+							// Only add to adjustment if stock has not already been reduced
+							if(childItemID != null && availableForSaleQty > 0)
+							{
+								lineItemMap = Map();
+								lineItemMap.put("item_id", childItemID);
+								lineItemMap.put("quantity_adjusted", 0 - invoiceQty);
+								lineItemMap.put("unit", "qty");
+								lineItemList.add(lineItemMap);
+							}
+							else
+							{
+								info "Skipping child SKU " + childSKU + " — available stock is 0 or already adjusted.";
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	info "AssociateSKU: " + AssociateSKU;
+	info "lineItemList: " + lineItemList;
+
+	// ── STEP 5: Create or update inventory adjustment ─────
+	if(lineItemList.size() > 0)
+	{
+		adjustmentData = Map();
+		adjustmentData.put("adjustment_type", "quantity");
+		adjustmentData.put("date", invoiceDetails.get("date"));
+		adjustmentData.put("reason", "Used in Website");
+		adjustmentData.put("reference_number", invoiceDetails.get("invoice_number"));
+		adjustmentData.put("line_items", lineItemList);
+
+		// Search for an existing adjustment matching this invoice
+		existingAdjustmentID = "";
+		hasMorePages = true;
+		pageList = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100};
+
+		for each pageNo in pageList
+		{
+			if(hasMorePages && existingAdjustmentID == "")
+			{
+				existingAdjustmentResponse = invokeurl
+				[
+					url :domainUrl + "/inventoryadjustments?organization_id=" + organizationID + "&page=" + pageNo + "&per_page=200"
+					type :GET
+					connection:"zpos"
+				];
+				adjustmentRecords = existingAdjustmentResponse.get("inventory_adjustments");
+				if(adjustmentRecords != null && adjustmentRecords.size() > 0)
+				{
+					for each adjRecord in adjustmentRecords
+					{
+						if(existingAdjustmentID == "")
+						{
+							if(adjRecord.get("reference_number") == invoiceDetails.get("invoice_number") && adjRecord.get("reason") == "Used in Website")
+							{
+								existingAdjustmentID = adjRecord.get("inventory_adjustment_id");
+							}
+						}
+					}
+					pageContext = existingAdjustmentResponse.get("page_context");
+					if(pageContext != null)
+					{
+						hasMorePages = ifnull(pageContext.get("has_more_page"), false);
+					}
+					else
+					{
+						hasMorePages = false;
+					}
+				}
+				else
+				{
+					hasMorePages = false;
+				}
+			}
+		}
+
+		if(existingAdjustmentID != "")
+		{
+			// Fetch existing adjustment to map line_item_ids
+			oldAdjustmentResponse = invokeurl
+			[
+				url :domainUrl + "/inventoryadjustments/" + existingAdjustmentID + "?organization_id=" + organizationID
+				type :GET
+				connection:"zpos"
+			];
+			oldAdjustment = oldAdjustmentResponse.get("inventory_adjustment");
+			if(oldAdjustment != null)
+			{
+				oldLineItems = oldAdjustment.get("line_items");
+				updatedLineItems = List();
+				usedOldLineIDs = List();
+
+				for each newLine in lineItemList
+				{
+					newItemID = newLine.get("item_id");
+					if(oldLineItems != null)
+					{
+						for each oldLine in oldLineItems
+						{
+							oldItemID = oldLine.get("item_id");
+							oldLineID = oldLine.get("line_item_id");
+							if(oldItemID != null && oldLineID != null)
+							{
+								if(oldItemID.toString() == newItemID.toString() && !usedOldLineIDs.contains(oldLineID.toString()))
+								{
+									newLine.put("line_item_id", oldLineID);
+									usedOldLineIDs.add(oldLineID.toString());
+									break;
+								}
+							}
+						}
+					}
+					updatedLineItems.add(newLine);
+				}
+				adjustmentData.put("line_items", updatedLineItems);
+
+				updateResponse = invokeurl
+				[
+					url :domainUrl + "/inventoryadjustments/" + existingAdjustmentID + "?organization_id=" + organizationID
+					type :PUT
+					parameters:adjustmentData.toString()
+					connection:"zpos"
+				];
+				info "Updated adjustment ID: " + existingAdjustmentID;
+				info updateResponse;
+			}
+			else
+			{
+				info "Existing adjustment could not be retrieved. No update was performed.";
+			}
+		}
+		else
+		{
+			createResponse = invokeurl
+			[
+				url :domainUrl + "/inventoryadjustments?organization_id=" + organizationID
+				type :POST
+				parameters:adjustmentData.toString()
+				connection:"zpos"
+			];
+			info "Created new adjustment: " + createResponse;
+		}
+	}
+	else
+	{
+		info "No matching component items found — no adjustment created.";
+	}
+}
+else
+{
+	info "Invoice details could not be retrieved.";
+}
