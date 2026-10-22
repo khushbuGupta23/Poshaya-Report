@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Zoho POS Reports",
+  "version": "1.6.0",
+  "description": "Sales and Stock reports from Zoho POS in Excel format",
+  "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["identity", "storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://accounts.zoho.in/*",
+    "https://api.zakya.in/*"
+  ]
+}
